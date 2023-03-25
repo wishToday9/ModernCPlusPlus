@@ -720,6 +720,60 @@ int main() {
 }
 ```
 
+#### 补充
+
+函数指针在typedef和using下的类型声明
+
+```cpp
+int func(char chr, double val) {
+	// do something
+}
+//typedef
+typedef int (*FunctionType1)(char, double);
+FunctionType1 func_ptr = &func; // &可以不加
+
+//using
+using FunctionType2 = int (*) (char, double);
+FunctionType2 func_ptr = &func;	// func同上
+
+```
+
+* 例子
+
+```cpp
+#include <iostream>
+
+int max(int a, int b) {
+    return a < b ? b : a;
+}
+// 利用typedef，声明一个函数指针[类型]
+typedef int (*comp_type)(int, int);  
+// 定义一个函数指针[对象]，其指向nullptr
+int (*comp_ptr) (int, int) = nullptr;    
+// c++11的类型别名，与typedef类似，同样声明了一个函数指针[类型]
+using comp_using = int (*)(int, int);    
+
+int main (int argc, char** argv) {
+
+    std::cout << "typedef" << std::endl;
+    comp_type c_ptr = &max;
+    std::cout << c_ptr(3, 4) << std::endl;
+
+    std::cout << "pointer" << std::endl;
+    comp_ptr = &max;
+    std::cout << comp_ptr(3, 4) << std::endl;
+
+    std::cout << "using" << std::endl;
+    comp_using using_ptr = &max;
+    std::cout << using_ptr(3, 4) << std::endl;
+
+    return 0;
+}
+
+```
+
+
+
 ### 变长参数模板
 
 模板一直是 C++ 所独有的黑魔法之一。 在 C++11 之前，无论是类模板还是函数模板，都只能按其指定的样子， 接受一组固定数量的模板参数；而 C++11 加入了新的表示方法， 允许任意个数、任意类别的模板参数，同时也不需要在定义时将参数的个数固定。
@@ -1139,7 +1193,1342 @@ void lambda_reference_capture() {
 
 * **表达式捕获**
 
+上面提到的值捕获、引用捕获都是已经在外层作用域声明的变量，因此这些捕获方式捕获的均为左值，而不能捕获右值。
+
+C++14 给与了我们方便，允许捕获的成员用任意的表达式进行初始化，这就允许了右值的捕获， 被声明的捕获变量类型会根据表达式进行判断，判断方式与使用 `auto` 本质上是相同的：
+
 ```cpp
+#include <iostream>
+#include <memory>  // std::make_unique
+#include <utility> // std::move
+
+void lambda_expression_capture() {
+    auto important = std::make_unique<int>(1);
+    auto add = [v1 = 1, v2 = std::move(important)](int x, int y) -> int {
+        return x+y+v1+(*v2);
+    };
+    std::cout << add(3,4) << std::endl;
+}
+```
+
+在上面的代码中，important独占一个指针，是无法被`=`值捕获到的，这时候可以将其转化成右值，在表达式中初始化。
+
+
+
+### 泛型lambda
+
+`auto`不能用于参数列表中，因为这样会和模板的功能冲突。但是lambda表达式并不是普通函数，所以没有明确指明参数表类型的情况下，Lambda表达式不能够模板化。从C++14以后，Lambda 函数的形式参数可以使用 `auto` 关键字来产生意义上的泛型：
+
+```cpp
+auto add = [](auto x, auto y) {
+    return x+y;
+};
+
+add(1, 2);
+add(1.1, 2.2);
+```
+
+## 3.2 函数对象包装器
+
+这部分是标准库的一部分，但是增强了C++语言运行时的能力。
+
+### std::function
+
+Lambda表达式的本质是一个和函数对象类型相似的类类型(称为**闭包类型**)的对象，当Lambda表达式的捕获列表为空的时候，闭包对象还能够转换为函数指针值进行传递，例如:
+
+```cpp
+#include <iostream>
+
+using foo = void(int); 
+void functional(foo f) { /
+    f(1); // 通过函数指针调用函数
+}
+
+int main() {
+    auto f = [](int value) {
+        std::cout << value << std::endl;
+    };
+    functional(f); // 传递闭包对象，隐式转换为 foo* 类型的函数指针值
+    f(1); // lambda 表达式调用
+    return 0;
+}
+```
+
+上面的代码给出了两种不同的调用形式，一种是将 Lambda 作为函数类型传递进行调用， 而另一种则是直接调用 Lambda 表达式，在 C++11 中，统一了这些概念，将能够被调用的对象的类型， 统一称之为可调用类型。而这种类型，便是通过 `std::function` 引入的。
+
+C++11 `std::function` 是一种通用、多态的函数封装， 它的实例可以对任何可以调用的目标实体进行存储、复制和调用操作， 它也是对 C++ 中现有的可调用实体的一种类型安全的包裹（相对来说，函数指针的调用不是类型安全的）， 换句话说，就是函数的容器。当我们有了函数的容器之后便能够更加方便的将函数、函数指针作为对象进行处理。 例如：
+
+```cpp
+#include <functional>
+#include <iostream>
+
+int foo(int para) {
+    return para;
+}
+
+int main() {
+    // std::function 包装了一个返回值为 int, 参数为 int 的函数
+    std::function<int(int)> func = foo;
+
+    int important = 10;
+    std::function<int(int)> func2 = [&](int value) -> int {
+        return 1+value+important;
+    };
+    std::cout << func(10) << std::endl;
+    std::cout << func2(10) << std::endl;
+}
+```
+
+### std::bind & std::placeholder
+
+而 `std::bind` 则是用来绑定函数调用的参数的， 它解决的需求是我们有时候可能并不一定能够一次性获得调用某个函数的全部参数，通过这个函数， 我们可以将部分调用参数提前绑定到函数身上成为一个新的对象，然后在参数齐全后，完成调用。 例如：
+
+```cpp
+int foo(int a, int b, int c) {
+    ;
+}
+int main() {
+    // 将参数1,2绑定到函数 foo 上，
+    // 但使用 std::placeholders::_1 来对第一个参数进行占位
+    auto bindFoo = std::bind(foo, std::placeholders::_1, 1, 2);
+    // 这时调用 bindFoo 时，只需要提供第一个参数即可
+    bindFoo(1);
+}
+```
+
+**有时候不知道一个函数的返回类型，这个时候就可以用auto进行代替～**
+
+### 右值引用
+
+右值引用是 C++11 引入的与 Lambda 表达式齐名的重要特性之一。它的引入解决了 C++ 中大量的历史遗留问题， 消除了诸如 `std::vector`、`std::string` 之类的额外开销， 也才使得函数对象容器 `std::function` 成为了可能。
+
+#### 左值、右值的纯右值、将亡值、右值
+
+* 左值
+
+顾名思义就是赋值符号左边的值。准确来说， 左值是表达式（不一定是赋值表达式）后依然存在的持久对象。
+
+* 右值
+
+右边的值，是指表达式结束后就不再存在的临时对象。C++11进行了进一步划分，纯右值、将亡值。
+
+**纯右值** (prvalue, pure rvalue)，纯粹的右值，要么是纯粹的字面量，例如 `10`, `true`； 要么是求值结果相当于字面量或匿名临时对象，例如 `1+2`。非引用返回的临时变量、运算表达式产生的临时变量、 原始字面量、Lambda 表达式都属于纯右值。
+
+需要注意的是，字面量除了字符串字面量以外，均为纯右值。而字符串字面量是一个左值，类型为 `const char` 数组。例如：
+
+```cpp
+#include <type_traits>
+
+int main() {
+    // 正确，"01234" 类型为 const char [6]，因此是左值
+    const char (&left)[6] = "01234";
+
+    // 断言正确，确实是 const char [6] 类型，注意 decltype(expr) 在 expr 是左值
+    // 且非无括号包裹的 id 表达式与类成员表达式时，会返回左值引用
+    static_assert(std::is_same<decltype("01234"), const char(&)[6]>::value, "");
+
+    // 错误，"01234" 是左值，不可被右值引用
+    // const char (&&right)[6] = "01234";
+}
+```
+
+但是注意，数组可以被隐式转换成相对应的指针类型，而转换表达式的结果（如果不是左值引用）则一定是个右值（右值引用为将亡值，否则为纯右值）。例如：
+
+```cpp
+const char*   p   = "01234";  // 正确，"01234" 被隐式转换为 const char*
+const char*&& pr  = "01234";  // 正确，"01234" 被隐式转换为 const char*，该转换的结果是纯右值
+// const char*& pl = "01234"; // 错误，此处不存在 const char* 类型的左值
+```
+
+* 将亡值
+
+**将亡值** (xvalue, expiring value)，是 C++11 为了引入右值引用而提出的概念（因此在传统 C++ 中， 纯右值和右值是同一个概念），也就是即将被销毁、却能够被移动的值。
+
+将亡值可能稍有些难以理解，我们来看这样的代码：
+
+```cpp
+std::vector<int> foo() {
+    std::vector<int> temp = {1, 2, 3, 4};
+    return temp;
+}
+
+std::vector<int> v = foo();
+```
+
+在这样的代码中，就传统的理解而言，函数 `foo` 的返回值 `temp` 在内部创建然后被赋值给 `v`， 然而 `v` 获得这个对象时，会将整个 `temp` 拷贝一份，然后把 `temp` 销毁，如果这个 `temp` 非常大， 这将造成大量额外的开销（这也就是传统 C++ 一直被诟病的问题）。在最后一行中，`v` 是左值、 `foo()` 返回的值就是右值（也是纯右值）。但是，`v` 可以被别的变量捕获到， 而 `foo()` 产生的那个返回值作为一个临时值，一旦被 `v` 复制后，将立即被销毁，无法获取、也不能修改。 而将亡值就定义了这样一种行为：临时的值能够被识别、同时又能够被移动。
+
+在 C++11 之后，编译器为我们做了一些工作，此处的左值 `temp` 会被进行此隐式右值转换， 等价于 `static_cast<std::vector<int> &&>(temp)`，进而此处的 `v` 会将 `foo` 局部返回的值进行移动。 也就是后面我们将会提到的移动语义。
+
+```cpp
+std::vector<int> test(){
+    std::vector<int> temp = {1, 2, 3, 4};
+    std::cout << &temp[0] << std::endl;
+    return temp;
+}
+
+int main() {
+    auto v = test();
+    std::cout << &v[0] << std::endl;
+}
+
+//输出地址一样
+0x55915ed19e70
+0x55915ed19e70
+```
+
+### 右值引用和左值引用
+
+要拿到一个将亡值，就需要用到右值引用：`T &&`，其中 `T` 是类型。 右值引用的声明让这个临时值的生命周期得以延长、只要变量还活着，那么将亡值将继续存活。
+
+C++11 提供了 `std::move` 这个方法将左值参数无条件的转换为右值， 有了它我们就能够方便的获得一个右值临时对象，例如：
+
+```cpp
+#include <iostream>
+#include <string>
+
+void reference(std::string& str) {
+    std::cout << "左值" << std::endl;
+}
+void reference(std::string&& str) {
+    std::cout << "右值" << std::endl;
+}
+
+int main()
+{
+    std::string lv1 = "string,"; // lv1 是一个左值
+    // std::string&& r1 = lv1; // 非法, 右值引用不能引用左值
+    std::string&& rv1 = std::move(lv1); // 合法, std::move可以将左值转移为右值
+    std::cout << rv1 << std::endl; // string,
+
+    const std::string& lv2 = lv1 + lv1; // 合法, 常量左值引用能够延长临时变量的生命周期
+    // lv2 += "Test"; // 非法, 常量引用无法被修改
+    std::cout << lv2 << std::endl; // string,string,
+
+    std::string&& rv2 = lv1 + lv2; // 合法, 右值引用延长临时对象生命周期
+    rv2 += "Test"; // 合法, 非常量引用能够修改临时变量
+    std::cout << rv2 << std::endl; // string,string,string,Test
+
+    reference(rv2); // 输出左值
+
+    return 0;
+}
+```
+
+`rv2` 虽然引用了一个右值，但由于它是一个引用，所以 `rv2` 依然是一个左值。
+
+注意，这里有一个很有趣的历史遗留问题，我们先看下面的代码：
+
+```cpp
+#include <iostream>
+
+int main() {
+    // int &a = std::move(1);    // 不合法，非常量左引用无法引用右值
+    const int &b = std::move(1); // 合法, 常量左引用允许引用右值
+
+    std::cout << a << b << std::endl;
+}
+```
+
+为什么不允许非常量引用绑定到非左值?
+
+```cpp
+void increase(int & v) {
+    v++;
+}
+void foo() {
+    double s = 1;
+    increase(s);
+}
+```
+
+由于 `int&` 不能引用 `double` 类型的参数，因此必须产生一个临时值来保存 `s` 的值， 从而当 `increase()` 修改这个临时值时，调用完成后 `s` 本身并没有被修改。
+
+第二个问题，为什么常量引用允许绑定到非左值？原因很简单，因为 Fortran 需要。
+
+### 移动语义
+
+传统 C++ 通过拷贝构造函数和赋值操作符为类对象设计了拷贝/复制的概念，但为了实现对资源的移动操作， 调用者必须使用先复制、再析构的方式，否则就需要自己实现移动对象的接口。 试想，搬家的时候是把家里的东西直接搬到新家去，而不是将所有东西复制一份（重买）再放到新家、 再把原来的东西全部扔掉（销毁）。
+
+传统C++没有区分`移动`和`拷贝`的概念，造成了大量的数据拷贝，浪费时间、空间，友值的出现刚好解决了这两个概念的混淆。
+
+```cpp
+#include <iostream>
+class A {
+public:
+    int *pointer;
+    A():pointer(new int(1)) {
+        std::cout << "构造" << pointer << std::endl;
+    }
+    A(A& a):pointer(new int(*a.pointer)) {
+        std::cout << "拷贝" << pointer << std::endl;
+    } // 无意义的对象拷贝
+    A(A&& a):pointer(a.pointer) {
+        a.pointer = nullptr;
+        std::cout << "移动" << pointer << std::endl;
+    }
+    ~A(){
+        std::cout << "析构" << pointer << std::endl;
+        delete pointer;
+    }
+};
+// 防止编译器优化
+A return_rvalue(bool test) {
+    A a,b;
+    if(test) return a; // 等价于 static_cast<A&&>(a);
+    else return b;     // 等价于 static_cast<A&&>(b);
+}
+int main() {
+    A obj = return_rvalue(false);
+    std::cout << "obj:" << std::endl;
+    std::cout << obj.pointer << std::endl;
+    std::cout << *obj.pointer << std::endl;
+    return 0;
+}
+```
+
+在这份代码中，
+
+1. 首先会在`return_value`中构造两个A对象，得到了两个构造函数的输出。
+2. 函数返回后，会产生一个将亡值，被A的移动构造(`A(A&&)`)调用，从而延长了生命周期，并将右值中的指针拿到，保存到了主函数的`obj`中，而将亡值的指针被设置为`nullptr`，防止这块内存区域被销毁。
+
+**输出:**
+
+```cpp
+construct:0x55d4b8493e70
+construct:0x55d4b84942a0
+move:0x55d4b84942a0
+destruct:0
+destruct:0x55d4b8493e70
+obj:
+0x55d4b84942a0
+1
+destruct:0x55d4b84942a0
+```
+
+
+
+在标准库中也有这样的例子:
+
+```cpp
+#include <iostream> // std::cout
+#include <utility> // std::move
+#include <vector> // std::vector
+#include <string> // std::string
+
+int main() {
+
+    std::string str = "Hello world.";
+    std::vector<std::string> v;
+
+    // 将使用 push_back(const T&), 即产生拷贝行为
+    v.push_back(str);
+    // 将输出 "str: Hello world."
+    std::cout << "str: " << str << std::endl;
+
+    // 将使用 push_back(const T&&), 不会出现拷贝行为
+    // 而整个字符串会被移动到 vector 中，所以有时候 std::move 会用来减少拷贝出现的开销
+    // 这步操作后, str 中的值会变为空
+    v.push_back(std::move(str));
+    // 将输出 "str: "
+    std::cout << "str: " << str << std::endl;
+
+    return 0;
+}
+```
+
+### push_back & emplace_back
+
+**差异1：**如果插入vector的 类型 的 构造函数 接受多个参数，那么push_back只能 接受 该类型的对象（实例），emplace_back 还能 接受 该类型的构造函数的参数
+
+如果只有一个构造参数，push_back在c++11就支持只把单个的构造参数传进去了（**写法更简洁，效果、性能跟传对象是一模一样的**）
+
+**差异2:**性能差异
+
+1. 内置类型都一样
+2. 用户自定义的类：emplace_pack仅在通过 使用 *构造参数* 传入 的时候更高效！
+
+
+
+test：
+
+```cpp
+#include <iostream>
+#include <vector>
+class A {
+public:
+  // 无参构造函数
+  A () { x = 0; std::cout << "A ()" << std::endl; }
+  // 有参构造函数
+  A (int x_arg) : x (x_arg) { std::cout << "A (x_arg), x=" << x << std::endl; }
+  // 拷贝构造函数
+  A (const A &rhs) noexcept { x = rhs.x + rhs.x * 10; std::cout << "A (A &), x=" << x << std::endl; }
+  // 移动构造函数
+  A (A &&rhs) noexcept { x = rhs.x + rhs.x * 100; std::cout << "A (A &&), x=" << x <<  std::endl; }
+  // 析构函数
+  ~A() { std::cout << "~A () | " << x << std::endl; }
+
+private:
+  int x;
+};
+```
+
+
+
+分为以下三种情况:
+
+*  通过构造参数向vector中插入对象（emplace_back很高效）
+
+```cpp
+void test_emplace_back_1() {
+  // emplace_back: 
+  //    1) 仅调用 有参构造函数 A (int x_arg) ；
+  // push_back：
+  //    1) 调用 有参构造函数 A (int x_arg) 创建临时对象；
+  //    2）调用 移动构造函数 A (A &&rhs)   到vector中；
+  //    3) 调用     析构函数               销毁临时对象；
+
+  {
+    std::vector<A> a;
+    std::cout << "call emplace_back: \n";
+    a.emplace_back(1);  
+        // (1) direct object creation inside vector
+  }
+
+  {
+    std::vector<A> a;
+    std::cout << "call push_back: \n";
+    a.push_back(2);
+	// (1) create temp object and 
+	// (2) then move to vector and 
+	// (3) free temp object
+  }
+}
+
+//输出:
+call emplace_back: 
+A (x_arg), x=1
+~A () | 1
+call push_back: 
+A (x_arg), x=2
+A (A &&), x=202
+~A () | 2
+~A () | 202
+```
+
+![image-20230324153942620](modernC++.assets/image-20230324153942620.png)
+
+* 插入临时对象(相同)
+
+```cpp
+void test_emplace_back_2() {
+  // 插入对象都需要三步走：建临时对象->移动->销毁临时对象
+
+  {
+    std::vector<A> a;
+    std::cout << "call emplace_back: \n";
+    a.emplace_back(A(1)); 
+	// (1) create temp object and 
+	// (2) then move to vector and 
+	// (3) free temp object
+  }
+
+  {
+    std::vector<A> a;
+    std::cout << "call push_back: \n";
+    a.push_back(A(2));
+	// (1) create temp object and 
+	// (2) then move to vector and 
+	// (3) free temp object
+  }
+}
+
+//输出
+call emplace_back: 
+A (x_arg), x=1
+A (A &&), x=101
+~A () | 1
+~A () | 101
+call push_back: 
+A (x_arg), x=2
+A (A &&), x=202
+~A () | 2
+~A () | 202
+```
+
+
+
+* 插入对象实例
+
+```cpp
+void test_emplace_back_3() {
+  // 注意，这里调用的是 拷贝构造 函数：拷贝->销毁临时对象
+
+  {
+    std::vector<A> a;
+    std::cout << "call emplace_back: \n";
+    A obj(1);
+    a.emplace_back(obj); 
+	// (1) copy to vector and 
+	// (2) free temp object
+  }
+
+  {
+    std::vector<A> a;
+    std::cout << "call push_back: \n";
+    A obj(2);
+    a.push_back(obj);
+	// (1) copy to vector and 
+	// (2) free temp object
+  }
+}
+
+//输出
+call emplace_back: 
+A (x_arg), x=1
+A (A &), x=11
+~A () | 1
+~A () | 11
+call push_back: 
+A (x_arg), x=2
+A (A &), x=22
+~A () | 2
+~A () | 22
+```
+
+### 完美转发
+
+前面我们提到了，一个声明的右值引用其实是一个左值。这就为我们进行参数转发（传递）造成了问题：
+
+```cpp
+void reference(int& v) {
+    std::cout << "lvalue" << std::endl;
+}
+void reference(int&& v) {
+    std::cout << "rvalue" << std::endl;
+}
+template <typename T>
+void pass(T&& v) {
+    std::cout << "conmmon pass by value:";
+    reference(v); // 始终调用 reference(int&)
+}
+int main() {
+    std::cout << "pass by rvalue:" << std::endl;
+    pass(1); // 1是右值, 但输出是左值
+
+    std::cout << "pass by lvalue::" << std::endl;
+    int l = 1;
+    pass(l); // l 是左值, 输出左值
+
+    return 0;
+}
+```
 
 ```
+
+```
+
+对于 `pass(1)` 来说，虽然传递的是右值，但由于 `v` 是一个引用，所以同时也是左值。 因此 `reference(v)` 会调用 `reference(int&)`，输出『左值』。 而对于`pass(l)`而言，`l`是一个左值，为什么会成功传递给 `pass(T&&)` 呢？
+
+
+
+**引用坍缩规则**:在传统 C++ 中，我们不能够对一个引用类型继续进行引用， 但 C++ 由于右值引用的出现而放宽了这一做法，从而产生了引用坍缩规则，允许我们对引用进行引用， 既能左引用，又能右引用。但是却遵循如下规则：
+
+| 函数形参类型 | 实参参数类型 | 推导后的函数形参类型 |
+| ------------ | ------------ | -------------------- |
+| T&           | 左引用       | T&                   |
+| T&           | 右引用       | T&                   |
+| T&&          | 左引用       | T&                   |
+| T&&          | 右引用       | T&&                  |
+
+因此，模板函数中使用 `T&&` 不一定能进行右值引用，当传入左值时，此函数的引用将被推导为左值。 更准确的讲，**无论模板参数是什么类型的引用，当且仅当实参类型为右引用时，模板参数才能被推导为右引用类型**。 这才使得 `v` 作为左值的成功传递。
+
+完美转发就是基于上述规律产生的。所谓完美转发，就是为了让我们在传递参数的时候， 保持原来的参数类型（左引用保持左引用，右引用保持右引用）。 为了解决这个问题，我们应该使用 `std::forward` 来进行参数的转发（传递）：
+
+```cpp
+
+#include <iostream>
+#include <utility>
+void reference(int& v) {
+    std::cout << "lvaue &" << std::endl;
+}
+void reference(int&& v) {
+    std::cout << "rvalue &&" << std::endl;
+}
+template <typename T>
+void pass(T&& v) {
+    std::cout << "          common pass: ";
+    reference(v);
+    std::cout << "       std::move pass: ";
+    reference(std::move(v));
+    std::cout << "    std::forward pass: ";
+    reference(std::forward<T>(v));
+    std::cout << "static_cast<T&&> pass: ";
+    reference(static_cast<T&&>(v));
+}
+int main() {
+    std::cout << "pass rvalue:" << std::endl;
+    pass(1);
+
+    std::cout << "pass lvalue:" << std::endl;
+    int v = 1;
+    pass(v);
+
+    return 0;
+}
+
+//输出
+pass rvalue:
+          common pass: lvaue &
+       std::move pass: rvalue &&
+    std::forward pass: rvalue &&
+static_cast<T&&> pass: rvalue &&
+pass lvalue:
+          common pass: lvaue &
+       std::move pass: rvalue &&
+    std::forward pass: lvaue &
+static_cast<T&&> pass: lvaue &
+```
+
+无论传递参数为左值还是右值，普通传参都会将参数作为左值进行转发， 所以 `std::move` 总会接受到一个左值，从而转发调用了`reference(int&&)` 输出右值引用。
+
+唯独 `std::forward` 即没有造成任何多余的拷贝，同时**完美转发**(传递)了函数的实参给了内部调用的其他函数。
+
+`td::forward` 和 `std::move` 一样，没有做任何事情，`std::move` 单纯的将左值转化为右值， `std::forward` 也只是单纯的将参数做了一个类型的转换，从现象上来看， `std::forward<T>(v)` 和 `static_cast<T&&>(v)` 是完全一样的。
+
+读者可能会好奇，为何一条语句能够针对两种类型的返回对应的值， 我们再简单看一看 `std::forward` 的具体实现机制，`std::forward` 包含两个重载：
+
+```cpp
+template<typename _Tp>
+constexpr _Tp&& forward(typename std::remove_reference<_Tp>::type& __t) noexcept
+{ return static_cast<_Tp&&>(__t); }
+
+template<typename _Tp>
+constexpr _Tp&& forward(typename std::remove_reference<_Tp>::type&& __t) noexcept
+{
+    static_assert(!std::is_lvalue_reference<_Tp>::value, "template argument"
+        " substituting _Tp is an lvalue reference type");
+    return static_cast<_Tp&&>(__t);
+}
+```
+
+在这份实现中，`std::remove_reference` 的功能是消除类型中的引用， `std::is_lvalue_reference` 则用于检查类型推导是否正确，在 `std::forward` 的第二个实现中 检查了接收到的值确实是一个左值，进而体现了坍缩规则。
+
+当 `std::forward` 接受左值时，`_Tp` 被推导为左值，所以返回值为左值；而当其接受右值时， `_Tp` 被推导为 右值引用，则基于坍缩规则，返回值便成为了 `&& + &&` 的右值。 可见 `std::forward` 的原理在于巧妙的利用了模板类型推导中产生的差异。
+
+这时我们能回答这样一个问题：为什么在使用循环语句的过程中，`auto&&` 是最安全的方式？ 因为当 `auto` 被推导为不同的左右引用时，与 `&&` 的坍缩组合是完美转发。
+
+
+
+**在STL中，随处可见这种问题。比如C++11引入的`emplace_back`，它接受左值也接受右值作为参数，接着，它转调用了空间配置器的construct函数，而construct又转调用了`placement new`，`placement new`根据参数是左值还是右值，决定调用拷贝构造函数还是移动构造函数。**
+
+> 详解:https://zhuanlan.zhihu.com/p/369203981
+
+# 4. 容器
+
+## 4.1 线性容器
+
+### std::array
+
+1. 为什么要引入 `std::array` 而不是直接使用 `std::vector`？
+2. 已经有了传统数组，为什么要用 `std::array`?
+
+`std::array` 对象的大小是固定的，如果容器大小是固定的，那么可以优先考虑使用 `std::array` 容器。 另外由于 `std::vector` 是自动扩容的，当存入大量的数据后，并且对容器进行了删除操作， 容器并不会自动归还被删除元素相应的内存，这时候就需要手动运行 `shrink_to_fit()` 释放这部分内存。
+
+```cpp
+std::vector<int> v;
+std::cout << "size:" << v.size() << std::endl;         // 输出 0
+std::cout << "capacity:" << v.capacity() << std::endl; // 输出 0
+
+// 如下可看出 std::vector 的存储是自动管理的，按需自动扩张
+// 但是如果空间不足，需要重新分配更多内存，而重分配内存通常是性能上有开销的操作
+v.push_back(1);
+v.push_back(2);
+v.push_back(3);
+std::cout << "size:" << v.size() << std::endl;         // 输出 3
+std::cout << "capacity:" << v.capacity() << std::endl; // 输出 4
+
+// 这里的自动扩张逻辑与 Golang 的 slice 很像
+v.push_back(4);
+v.push_back(5);
+std::cout << "size:" << v.size() << std::endl;         // 输出 5
+std::cout << "capacity:" << v.capacity() << std::endl; // 输出 8
+
+// 如下可看出容器虽然清空了元素，但是被清空元素的内存并没有归还
+v.clear();                                             
+std::cout << "size:" << v.size() << std::endl;         // 输出 0
+std::cout << "capacity:" << v.capacity() << std::endl; // 输出 8
+
+// 额外内存可通过 shrink_to_fit() 调用返回给系统
+v.shrink_to_fit();
+std::cout << "size:" << v.size() << std::endl;         // 输出 0
+std::cout << "capacity:" << v.capacity() << std::endl; // 输出 0
+
+
+//输出
+size:0
+capacity:0
+size:3
+capacity:4
+size:5
+capacity:8
+size:0
+capacity:8
+size:0
+capacity:0
+```
+
+而第二个问题就更加简单，使用 `std::array` 能够让代码变得更加“现代化”，而且封装了一些操作函数，比如获取数组大小以及检查是否非空，同时还能够友好的使用标准库中的容器算法，比如 `std::sort`。
+
+使用 `std::array` 很简单，只需指定其类型和大小即可：
+
+```cpp
+
+
+std::array<int, 4> arr = {1, 2, 3, 4};
+
+arr.empty(); // 检查容器是否为空
+arr.size();  // 返回容纳的元素数
+
+// 迭代器支持
+for (auto &i : arr)
+{
+    // ...
+}
+
+// 用 lambda 表达式排序
+std::sort(arr.begin(), arr.end(), [](int a, int b) {
+    return b < a;
+});
+
+// 数组大小参数必须是常量表达式
+constexpr int len = 4;
+std::array<int, len> arr = {1, 2, 3, 4};
+
+// 非法,不同于 C 风格数组，std::array 不会自动退化成 T*
+// int *arr_p = arr;
+```
+
+当我们开始用上了 `std::array` 时，难免会遇到要将其兼容 C 风格的接口：
+
+```cpp
+void foo(int *p, int len) {
+    return;
+}
+
+std::array<int, 4> arr = {1,2,3,4};
+
+// C 风格接口传参
+// foo(arr, arr.size()); // 非法, 无法隐式转换
+foo(&arr[0], arr.size());
+foo(arr.data(), arr.size());
+
+// 使用 `std::sort`
+std::sort(arr.begin(), arr.end());
+```
+
+## 4.2 无序容器
+
+我们已经熟知了传统 C++ 中的有序容器 `std::map`/`std::set`，这些元素内部通过红黑树进行实现， 插入和搜索的平均复杂度均为 `O(log(size))`。在插入元素时候，会根据 `<` 操作符比较元素大小并判断元素是否相同， 并选择合适的位置插入到容器中。当对这个容器中的元素进行遍历时，输出结果会按照 `<` 操作符的顺序来逐个遍历。
+
+而无序容器中的元素是不进行排序的，内部通过 Hash 表实现，插入和搜索元素的平均复杂度为 `O(constant)`， 在不关心容器内部元素顺序时，能够获得显著的性能提升。
+
+C++11 引入了的两组无序容器分别是：`std::unordered_map`/`std::unordered_multimap` 和  `std::unordered_set`/`std::unordered_multiset`。
+
+它们的用法和原有的 `std::map`/`std::multimap`/`std::set`/`set::multiset` 基本类似， 由于这些容器我们已经很熟悉了，便不一一举例，我们直接来比较一下`std::map`和`std::unordered_map`：
+
+```cpp
+#include <iostream>
+#include <string>
+#include <unordered_map>
+#include <map>
+
+int main() {
+    // 两组结构按同样的顺序初始化
+    std::unordered_map<int, std::string> u = {
+        {1, "1"},
+        {3, "3"},
+        {2, "2"}
+    };
+    std::map<int, std::string> v = {
+        {1, "1"},
+        {3, "3"},
+        {2, "2"}
+    };
+
+    // 分别对两组结构进行遍历
+    std::cout << "std::unordered_map" << std::endl;
+    for( const auto & n : u)
+        std::cout << "Key:[" << n.first << "] Value:[" << n.second << "]\n";
+
+    std::cout << std::endl;
+    std::cout << "std::map" << std::endl;
+    for( const auto & n : v)
+        std::cout << "Key:[" << n.first << "] Value:[" << n.second << "]\n";
+}
+
+
+
+//输出
+std::unordered_map
+Key:[2] Value:[2]
+Key:[3] Value:[3]
+Key:[1] Value:[1]
+
+std::map
+Key:[1] Value:[1]
+Key:[2] Value:[2]
+Key:[3] Value:[3]
+```
+
+## 4.3 元组
+
+### 基操
+
+1. `std::make_tuple`: 构造元组
+2. `std::get`: 获得元组某个位置的值
+3. `std::tie`: 元组拆包
+
+```cpp
+#include <tuple>
+#include <iostream>
+
+auto get_student(int id)
+{
+    // 返回类型被推断为 std::tuple<double, char, std::string>
+
+    if (id == 0)
+        return std::make_tuple(3.8, 'A', "张三");
+    if (id == 1)
+        return std::make_tuple(2.9, 'C', "李四");
+    if (id == 2)
+        return std::make_tuple(1.7, 'D', "王五");
+    return std::make_tuple(0.0, 'D', "null");
+    // 如果只写 0 会出现推断错误, 编译失败
+}
+
+int main()
+{
+    auto student = get_student(0);
+    std::cout << "ID: 0, "
+    << "GPA: " << std::get<0>(student) << ", "
+    << "成绩: " << std::get<1>(student) << ", "
+    << "姓名: " << std::get<2>(student) << '\n';
+
+    double gpa;
+    char grade;
+    std::string name;
+
+    // 元组进行拆包
+    std::tie(gpa, grade, name) = get_student(1);
+    std::cout << "ID: 1, "
+    << "GPA: " << gpa << ", "
+    << "成绩: " << grade << ", "
+    << "姓名: " << name << '\n';
+}
+```
+
+`std::get` 除了使用常量获取元组对象外，C++14 增加了使用类型来获取元组中的对象：
+
+```cpp
+std::tuple<std::string, double, double, int> t("123", 4.5, 6.7, 8);
+std::cout << std::get<std::string>(t) << std::endl;
+std::cout << std::get<double>(t) << std::endl; // 非法, 引发编译期错误
+std::cout << std::get<3>(t) << std::endl;
+```
+
+### 运行期索引
+
+如果你仔细思考一下可能就会发现上面代码的问题，`std::get<>` 依赖一个编译期的常量，所以下面的方式是不合法的：
+
+```cpp
+int index = 1;
+std::get<index>(t);
+```
+
+那么要怎么处理？答案是，使用 `std::variant<>`（C++ 17 引入），提供给 `variant<>` 的类型模板参数 可以让一个 `variant<>` 从而容纳提供的几种类型的变量（在其他语言，例如 Python/JavaScript 等，表现为动态类型）：
+
+```cpp
+#include <variant>
+template <size_t n, typename... T>
+constexpr std::variant<T...> _tuple_index(const std::tuple<T...>& tpl, size_t i) {
+    if constexpr (n >= sizeof...(T))
+        throw std::out_of_range("越界.");
+    if (i == n)
+        return std::variant<T...>{ std::in_place_index<n>, std::get<n>(tpl) };
+    return _tuple_index<(n < sizeof...(T)-1 ? n+1 : 0)>(tpl, i);
+}
+template <typename... T>
+constexpr std::variant<T...> tuple_index(const std::tuple<T...>& tpl, size_t i) {
+    return _tuple_index<0>(tpl, i);
+}
+template <typename T0, typename ... Ts>
+std::ostream & operator<< (std::ostream & s, std::variant<T0, Ts...> const & v) { 
+    std::visit([&](auto && x){ s << x;}, v); 
+    return s;
+}
+```
+
+这样我们就能：
+
+```cpp
+int i = 1;
+std::cout << tuple_index(t, i) << std::endl;
+```
+
+### 合并与遍历
+
+还有一个常见的需求就是合并两个元组，这可以通过 `std::tuple_cat` 来实现：
+
+```cpp
+auto new_tuple = std::tuple_cat(get_student(1), std::move(t));
+```
+
+马上就能够发现，应该如何快速遍历一个元组？但是我们刚才介绍了如何在运行期通过非常数索引一个 `tuple` 那么遍历就变得简单了， 首先我们需要知道一个元组的长度，可以：
+
+```cpp
+template <typename T>
+auto tuple_len(T &tpl) {
+    return std::tuple_size<T>::value;
+}
+```
+
+这样就能够对元组进行迭代了：
+
+```cpp
+// 迭代
+for(int i = 0; i != tuple_len(new_tuple); ++i)
+    // 运行期索引
+    std::cout << tuple_index(new_tuple, i) << std::endl;
+```
+
+# 5. 智能指针和内存管理
+
+## 5.1 RAII 与引用计数
+
+了解 `Objective-C`/`Swift` 的程序员应该知道引用计数的概念。引用计数这种计数是为了防止内存泄露而产生的。 基本想法是对于动态分配的对象，进行引用计数，每当增加一次对同一个对象的引用，那么引用对象的引用计数就会增加一次， 每删除一次引用，引用计数就会减一，当一个对象的引用计数减为零时，就自动删除指向的堆内存。
+
+在传统 C++ 中，『记得』手动释放资源，总不是最佳实践。因为我们很有可能就忘记了去释放资源而导致泄露。 所以通常的做法是对于一个对象而言，**我们在构造函数的时候申请空间，而在析构函数（在离开作用域时调用）的时候释放空间， 也就是我们常说的 RAII 资源获取即初始化技术。**
+
+凡事都有例外，我们总会有需要将对象在自由存储上分配的需求，在传统 C++ 里我们只好使用 `new` 和 `delete` 去 『记得』对资源进行释放。而 C++11 引入了智能指针的概念，使用了引用计数的想法，让程序员不再需要关心手动释放内存。 这些智能指针包括 `std::shared_ptr`/`std::unique_ptr`/`std::weak_ptr`，使用它们需要包含头文件 `<memory>`。
+
+> 注意：引用计数不是垃圾回收，引用计数能够尽快收回不再被使用的对象，同时在回收的过程中也不会造成长时间的等待， 更能够清晰明确的表明资源的生命周期。
+
+## 5.2 std::shared_ptr
+
+`std::shared_ptr` 是一种智能指针，它能够记录多少个 `shared_ptr` 共同指向一个对象，从而消除显式的调用 `delete`，当引用计数变为零的时候就会将对象自动删除。
+
+但还不够，因为使用 `std::shared_ptr` 仍然需要使用 `new` 来调用，这使得代码出现了某种程度上的不对称。
+
+`std::make_shared` 就能够用来消除显式的使用 `new`，所以`std::make_shared` 会分配创建传入参数中的对象， 并返回这个对象类型的`std::shared_ptr`指针。例如：
+
+```cpp
+#include <iostream>
+#include <memory>
+void foo(std::shared_ptr<int> i) {
+    (*i)++;
+}
+int main() {
+    // auto pointer = new int(10); // illegal, no direct assignment
+    // Constructed a std::shared_ptr
+    auto pointer = std::make_shared<int>(10);
+    foo(pointer);
+    std::cout << *pointer << std::endl; // 11
+    // The shared_ptr will be destructed before leaving the scope
+    return 0;
+}
+```
+
+但是在C++17之前有一个严重的限制，就是他并不支持动态数组。
+
+```cpp
+
+
+#include <memory>
+
+std::shared_ptr<int[]> sp1(new int[10]()); // 错误，c++17前不能传递数组类型作为shared_ptr的模板参数
+std::unique_ptr<int[]> up1(new int[10]()); // ok, unique_ptr对此做了特化
+
+std::shared_ptr<int> sp2(new int[10]()); // 错误，可以编译，但会产生未定义行为，请不要这么做
+```
+
+++17的改进，shared_ptr增加了`opreator[]`，并可以使用`int[]`类的数组类型做模板参数，所以`sp`的定义可以是这样：
+
+```cpp
+std::shared_ptr<int[]> sp3(new int[10]());
+```
+
+对于访问分配的空间，可以将`sp3.get()[index]`替换为`sp3[index]`。看个具体的例子：
+
+```cpp
+#include <iostream>
+#include <memory>
+
+int main()
+{
+    std::shared_ptr<int[]> sp(new int[5]());
+    for (int i = 0; i < 5; ++i) {
+        sp[i] = (i+1) * (i+1);
+    }
+
+    for (int i = 0; i < 5; ++i) {
+        std::cout << sp[i] << std::endl;
+    }
+}
+```
+
+使用被极大得简化了，然而还是有点问题，那就是无法使用`std::make_shared`，而我们除非指定自己的delete functor，否则我们应该尽量使用`std::make_shared`。
+
+所以c++20对此做了改进：
+
+```cpp
+auto up2 = std::make_unique<int[]>(10); // 从c++14开始，分配一个管理有10个int元素的动态数组的unique_ptr
+
+// c++2a中你可以这样写，与上一句相似，只不过返回的是shared_ptr
+auto sp3 = std::make_shared<int[]>(10);
+```
+
+`std::shared_ptr` 可以通过 `get()` 方法来获取原始指针，通过 `reset()` 来减少一个引用计数， 并通过`use_count()`来查看一个对象的引用计数。例如：
+
+```c++
+auto pointer = std::make_shared<int>(10);
+auto pointer2 = pointer; // 引用计数+1
+auto pointer3 = pointer; // 引用计数+1
+int *p = pointer.get();  // 这样不会增加引用计数
+std::cout << "pointer.use_count() = " << pointer.use_count() << std::endl;   // 3
+std::cout << "pointer2.use_count() = " << pointer2.use_count() << std::endl; // 3
+std::cout << "pointer3.use_count() = " << pointer3.use_count() << std::endl; // 3
+
+pointer2.reset();
+std::cout << "reset pointer2:" << std::endl;
+std::cout << "pointer.use_count() = " << pointer.use_count() << std::endl;   // 2
+std::cout << "pointer2.use_count() = "
+          << pointer2.use_count() << std::endl;           // pointer2 已 reset; 0
+std::cout << "pointer3.use_count() = " << pointer3.use_count() << std::endl; // 2
+pointer3.reset();
+std::cout << "reset pointer3:" << std::endl;
+std::cout << "pointer.use_count() = " << pointer.use_count() << std::endl;   // 1
+std::cout << "pointer2.use_count() = " << pointer2.use_count() << std::endl; // 0
+std::cout << "pointer3.use_count() = "
+          << pointer3.use_count() << std::endl;           // pointer3 已 reset; 0
+```
+
+## 5.3 std::unique_ptr
+
+`std::unique_ptr` 是一种独占的智能指针，它禁止其他智能指针与其共享同一个对象，从而保证代码的安全：
+
+```c++
+std::unique_ptr<int> pointer = std::make_unique<int>(10); // make_unique 从 C++14 引入
+std::unique_ptr<int> pointer2 = pointer; // 非法
+```
+
+> `make_unique` 并不复杂，C++11 没有提供 `std::make_unique`，可以自行实现：
+>
+> ```cpp
+> template<typename T, typename ...Args>
+> std::unique_ptr<T> make_unique( Args&& ...args ) {
+>   return std::unique_ptr<T>( new T( std::forward<Args>(args)... ) );
+> }
+> ```
+
+既然是独占，换句话说就是不可复制。但是，我们可以利用 `std::move` 将其转移给其他的 `unique_ptr`，例如：
+
+```cpp
+#include <iostream>
+#include <memory>
+
+struct Foo {
+    Foo() { std::cout << "Foo::Foo" << std::endl; }
+    ~Foo() { std::cout << "Foo::~Foo" << std::endl; }
+    void foo() { std::cout << "Foo::foo" << std::endl; }
+};
+
+void f(const Foo &) {
+    std::cout << "f(const Foo&)" << std::endl;
+}
+
+int main() {
+    std::unique_ptr<Foo> p1(std::make_unique<Foo>());
+    // p1 不空, 输出
+    if (p1) p1->foo();
+    {
+        std::unique_ptr<Foo> p2(std::move(p1));
+        // p2 不空, 输出
+        f(*p2);
+        // p2 不空, 输出
+        if(p2) p2->foo();
+        // p1 为空, 无输出
+        if(p1) p1->foo();
+        p1 = std::move(p2);
+        // p2 为空, 无输出
+        if(p2) p2->foo();
+        std::cout << "p2 被销毁" << std::endl;
+    }
+    // p1 不空, 输出
+    if (p1) p1->foo();
+    // Foo 的实例会在离开作用域时被销毁
+}
+```
+
+## 5.4 std::weak_ptr
+
+如果你仔细思考 `std::shared_ptr` 就会发现依然存在着资源无法释放的问题。看下面这个例子：
+
+```cpp
+struct A;
+struct B;
+
+struct A {
+    std::shared_ptr<B> pointer;
+    ~A() {
+        std::cout << "A 被销毁" << std::endl;
+    }
+};
+struct B {
+    std::shared_ptr<A> pointer;
+    ~B() {
+        std::cout << "B 被销毁" << std::endl;
+    }
+};
+int main() {
+    auto a = std::make_shared<A>();
+    auto b = std::make_shared<B>();
+    a->pointer = b;
+    b->pointer = a;
+}
+```
+
+运行结果是 A, B 都不会被销毁，这是因为 a,b 内部的 pointer 同时又引用了 `a,b`，这使得 `a,b` 的引用计数均变为了 2，而离开作用域时，`a,b` 智能指针被析构，却只能造成这块区域的引用计数减一，这样就导致了 `a,b` 对象指向的内存区域引用计数不为零，而外部已经没有办法找到这块区域了，也就造成了内存泄露，如图 ：
+
+![image-20230324171747903](modernC++.assets/image-20230324171747903.png)
+
+
+
+解决这个问题的办法就是使用弱引用指针 `std::weak_ptr`，`std::weak_ptr`是一种弱引用（相比较而言 `std::shared_ptr` 就是一种强引用）。弱引用不会引起引用计数增加，当换用弱引用时候，最终的释放流程如图 所示：
+
+![image-20230324171850820](modernC++.assets/image-20230324171850820.png)
+
+
+
+在上图中，最后一步只剩下 B，而 B 并没有任何智能指针引用它，因此这块内存资源也会被释放。
+
+`std::weak_ptr` 没有 `*` 运算符和 `->` 运算符，所以不能够对资源进行操作，它可以用于检查 `std::shared_ptr` 是否存在，其 `expired()`(英文单词失效) 方法能在资源未被释放时，会返回 `false`，否则返回 `true`；除此之外，它也可以用于获取指向原始对象的 `std::shared_ptr` 指针，其 `lock()` 方法在原始对象未被释放时，返回一个指向原始对象的 `std::shared_ptr` 指针，进而访问原始对象的资源，否则返回`nullptr`。
+
+# 6. 正则表达式
+
+没用过，用到了再看～
+
+# 7.并行与并发
+
+## 7.1 并行基础
+
+`std::thread` 用于创建一个执行的线程实例，所以它是一切并发编程的基础，使用时需要包含 `<thread>` 头文件， 它提供了很多基本的线程操作，例如 `get_id()` 来获取所创建线程的线程 ID，使用 `join()` 来等待一个线程结束（与该线程汇合）等等，例如：
+
+```cpp
+#include <iostream>
+#include <thread>
+
+int main() {
+    std::thread t([](){
+        std::cout << "hello world." << std::endl;
+    });
+    t.join();
+    return 0;
+}
+```
+
+## 7.2 互斥量和临界区
+
+我们在操作系统、亦或是数据库的相关知识中已经了解过了有关并发技术的基本知识，`mutex` 就是其中的核心之一。 C++11 引入了 `mutex` 相关的类，其所有相关的函数都放在 `<mutex>` 头文件中。
+
+`std::mutex` 是 C++11 中最基本的 `mutex` 类，通过实例化 `std::mutex` 可以创建互斥量， 而通过其成员函数 `lock()` 可以进行上锁，`unlock()` 可以进行解锁。 但是在实际编写代码的过程中，最好不去直接调用成员函数， 因为调用成员函数就需要在每个临界区的出口处调用 `unlock()`，当然，还包括异常。 这时候 C++11 还为互斥量提供了一个 RAII 语法的模板类 `std::lock_guard`。 RAII 在不失代码简洁性的同时，很好的保证了代码的异常安全性。
+
+
+
+在 RAII 用法下，对于临界区的互斥量的创建只需要在作用域的开始部分，例如：
+
+```cpp
+#include <iostream>
+#include <mutex>
+#include <thread>
+
+int v = 1;
+
+void critical_section(int change_v) {
+    static std::mutex mtx;
+    std::lock_guard<std::mutex> lock(mtx);
+
+    // 执行竞争操作
+    v = change_v;
+
+    // 离开此作用域后 mtx 会被释放
+}
+
+int main() {
+    std::thread t1(critical_section, 2), t2(critical_section, 3);
+    t1.join();
+    t2.join();
+
+    std::cout << v << std::endl;
+    return 0;
+}
+```
+
+由于 C++ 保证了所有栈对象在生命周期结束时会被销毁，所以这样的代码也是异常安全的。 无论 `critical_section()` 正常返回、还是在中途抛出异常，都会引发堆栈回退，也就自动调用了 `unlock()`。
+
+而 `std::unique_lock` 则是相对于 `std::lock_guard` 出现的，`std::unique_lock` 更加灵活， `std::unique_lock` 的对象会以独占所有权（没有其他的 `unique_lock` 对象同时拥有某个 `mutex` 对象的所有权） 的方式管理 `mutex` 对象上的上锁和解锁的操作。所以在并发编程中，推荐使用 `std::unique_lock`。
+
+`std::lock_guard` 不能显式的调用 `lock` 和 `unlock`， 而 `std::unique_lock` 可以在声明后的任意位置调用， 可以缩小锁的作用范围，提供更高的并发度。
+
+如果你用到了条件变量 `std::condition_variable::wait` 则必须使用 `std::unique_lock` 作为参数。
+
+```cpp
+#include <iostream>
+#include <mutex>
+#include <thread>
+
+int v = 1;
+
+void critical_section(int change_v) {
+    static std::mutex mtx;
+    std::unique_lock<std::mutex> lock(mtx);
+    // 执行竞争操作
+    v = change_v;
+    std::cout << v << std::endl;
+    // 将锁进行释放
+    lock.unlock();
+
+    // 在此期间，任何人都可以抢夺 v 的持有权
+
+    // 开始另一组竞争操作，再次加锁
+    lock.lock();
+    v += 1;
+    std::cout << v << std::endl;
+}
+
+int main() {
+    std::thread t1(critical_section, 2), t2(critical_section, 3);
+    t1.join();
+    t2.join();
+    return 0;
+}
+```
+
+## 7.3 期物
+
+期物（Future）表现为 `std::future`，它提供了一个访问异步操作结果的途径，这句话很不好理解。 为了理解这个特性，我们需要先理解一下在 C++11 之前的多线程行为。
+
+试想，如果我们的主线程 A 希望新开辟一个线程 B 去执行某个我们预期的任务，并返回我一个结果。 而这时候，线程 A 可能正在忙其他的事情，无暇顾及 B 的结果， 所以我们会很自然的希望能够在某个特定的时间获得线程 B 的结果。
+
+在 C++11 的 `std::future` 被引入之前，通常的做法是： 创建一个线程 A，在线程 A 里启动任务 B，当准备完毕后发送一个事件，并将结果保存在全局变量中。 而主函数线程 A 里正在做其他的事情，当需要结果的时候，调用一个线程等待函数来获得执行的结果。
+
+而 C++11 提供的 `std::future` 简化了这个流程，可以用来获取异步任务的结果。 自然地，我们很容易能够想象到把它作为一种简单的线程同步手段，即屏障（barrier）。
+
+为了看一个例子，我们这里额外使用 `std::packaged_task`，它可以用来封装任何可以调用的目标，从而用于实现异步的调用。 举例来说：
+
+```cpp
+
+
+#include <iostream>
+#include <future>
+#include <thread>
+
+int main() {
+    // 将一个返回值为7的 lambda 表达式封装到 task 中
+    // std::packaged_task 的模板参数为要封装函数的类型
+    std::packaged_task<int()> task([](){return 7;});
+    // 获得 task 的期物
+    std::future<int> result = task.get_future(); // 在一个线程中执行 task
+    std::thread(std::move(task)).detach();
+    std::cout << "waiting...";
+    result.wait(); // 在此设置屏障，阻塞到期物的完成
+    // 输出执行结果
+    std::cout << "done!" << std:: endl << "future result is "
+              << result.get() << std::endl;
+    return 0;
+}
+```
+
+在封装好要调用的目标后，可以使用 `get_future()` 来获得一个 `std::future` 对象，以便之后实施线程同步。
+
+
+
+## 7.4 条件变量
+
+条件变量 `std::condition_variable` 是为了解决死锁而生，当互斥操作不够用而引入的。 比如，线程可能需要等待某个条件为真才能继续执行， 而一个忙等待循环中可能会导致所有其他线程都无法进入临界区使得条件为真时，就会发生死锁。 所以，`condition_variable` 实例被创建出现主要就是用于唤醒等待线程从而避免死锁。 `std::condition_variable`的 `notify_one()` 用于唤醒一个线程； `notify_all()` 则是通知所有线程。下面是一个生产者和消费者模型的例子：
+
+```cpp
+#include <queue>
+#include <chrono>
+#include <mutex>
+#include <thread>
+#include <iostream>
+#include <condition_variable>
+
+
+int main() {
+    std::queue<int> produced_nums;
+    std::mutex mtx;
+    std::condition_variable cv;
+    bool notified = false;  // 通知信号
+
+    // 生产者
+    auto producer = [&]() {
+        for (int i = 0; ; i++) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(900));
+            std::unique_lock<std::mutex> lock(mtx);
+            std::cout << "producing " << i << std::endl;
+            produced_nums.push(i);
+            notified = true;
+            cv.notify_all(); // 此处也可以使用 notify_one
+        }
+    };
+    // 消费者
+    auto consumer = [&]() {
+        while (true) {
+            std::unique_lock<std::mutex> lock(mtx);
+            while (!notified) {  // 避免虚假唤醒
+                cv.wait(lock);
+            }
+            // 短暂取消锁，使得生产者有机会在消费者消费空前继续生产
+            lock.unlock();
+            // 消费者慢于生产者
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            lock.lock();
+            while (!produced_nums.empty()) {
+                std::cout << "consuming " << produced_nums.front() << std::endl;
+                produced_nums.pop();
+            }
+            notified = false;
+        }
+    };
+
+    // 分别在不同的线程中运行
+    std::thread p(producer);
+    std::thread cs[2];
+    for (int i = 0; i < 2; ++i) {
+        cs[i] = std::thread(consumer);
+    }
+    p.join();
+    for (int i = 0; i < 2; ++i) {
+        cs[i].join();
+    }
+    return 0;
+}
+```
+
+值得一提的是，在生产者中我们虽然可以使用 `notify_one()`，但实际上并不建议在此处使用， 因为在多消费者的情况下，我们的消费者实现中简单放弃了锁的持有，这使得可能让其他消费者 争夺此锁，从而更好的利用多个消费者之间的并发。话虽如此，但实际上因为 `std::mutex` 的排他性， 我们根本无法期待多个消费者能真正意义上的并行消费队列的中生产的内容，我们仍需要粒度更细的手段。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
